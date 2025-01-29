@@ -1,4 +1,3 @@
-
 <!DOCTYPE html>
 <html>
 <head>
@@ -34,6 +33,12 @@
             display: none;
             margin-top: 0.5rem;
         }
+        .intermediate {
+            background: #e6f3ff;
+            padding: 0.5rem;
+            margin: 0.5rem 0;
+            border-left: 3px solid #0066cc;
+        }
     </style>
 </head>
 <body>
@@ -42,7 +47,7 @@
         
         <div>
             <label for="input">Enter Haskell List Comprehension:</label>
-            <textarea id="input" placeholder="Example: [(a,b) | a <- as, b <- bs]"></textarea>
+            <textarea id="input" placeholder="Example: [(x,y) | x <- xs, x > 0, y <- ys, y < 10]"></textarea>
         </div>
         
         <button onclick="convertToCore()">Convert</button>
@@ -75,10 +80,16 @@
 
             try {
                 error.style.display = 'none';
-                const { result1, result2, translations } = translateListComprehension(input);
-                output1.value = result1; // Version using concat/map
-                output2.value = result2; // Version using flatten/maplist
-                steps.textContent = translations.join('\n');
+                const state = {
+                    translations: [],
+                    currentExpr1: '',
+                    currentExpr2: '',
+                    depth: 0
+                };
+                const { result1, result2 } = translateListComprehension(input, state);
+                output1.value = result1;
+                output2.value = result2;
+                steps.textContent = state.translations.join('\n\n');
             } catch (e) {
                 error.textContent = `Error: ${e.message}`;
                 error.style.display = 'block';
@@ -93,77 +104,133 @@
                 throw new Error('List comprehension must be enclosed in square brackets.');
             }
 
-            input = input.slice(1, -1).trim(); // Remove square brackets
+            input = input.slice(1, -1).trim();
 
             if (!input.includes('|')) {
-                return { expression: input, qualifiers: [] }; // No qualifiers
+                return { expression: input, qualifiers: [] };
             }
 
-            const [expr, quals] = input.split('|').map(part => part.trim());
-            
+            const parts = input.split('|');
+            if (parts.length !== 2) {
+                throw new Error('Invalid list comprehension syntax: expected single | separator.');
+            }
+
+            const [expr, quals] = parts.map(part => part.trim());
             if (!expr || !quals) {
-                throw new Error('Invalid list comprehension syntax.');
+                throw new Error('Invalid list comprehension syntax: missing expression or qualifiers.');
             }
 
             const qualifiers = quals.split(',').map(q => q.trim());
-            
+            if (qualifiers.some(q => !q)) {
+                throw new Error('Invalid qualifier syntax: empty qualifier found.');
+            }
+
             return { expression: expr, qualifiers };
         }
 
-        function translateListComprehension(input, depth = 0, translations = []) {
-            const { expression, qualifiers } = parseListComprehension(input);
+        function addTranslation(state, message) {
+            state.translations.push('  '.repeat(state.depth) + message);
+        }
 
-            // Base case: no qualifiers
+        function showIntermediateResult(state, phase, expr1, expr2) {
+            addTranslation(state, `\nIntermediate Result (Phase ${phase}):`);
+            addTranslation(state, `Version 1: ${expr1}`);
+            addTranslation(state, `Version 2: ${expr2}`);
+            state.currentExpr1 = expr1;
+            state.currentExpr2 = expr2;
+        }
+
+        function translateListComprehension(input, state) {
+            addTranslation(state, `PHASE 1: ANALYZING "${input}"`);
+            addTranslation(state, `Input Depth Level: ${state.depth}`);
+            
+            const { expression, qualifiers } = parseListComprehension(input);
+            
+            addTranslation(state, `Decomposition:`);
+            addTranslation(state, `• Expression: ${expression}`);
+            addTranslation(state, `• Qualifiers: [${qualifiers.join(', ')}]`);
+
+            // Base case
             if (qualifiers.length === 0) {
-                translations.push(`"${input}" --> [${expression}]`);
-                return { 
-                    result1: `[${expression}]`,
-                    result2: `[${expression}]`,
-                    translations 
-                };
+                const result = `[${expression}]`;
+                addTranslation(state, `\nBase Case Reached:`);
+                addTranslation(state, `• No qualifiers left`);
+                addTranslation(state, `• Final expression: ${result}`);
+                
+                showIntermediateResult(state, 'Base', result, result);
+                return { result1: result, result2: result };
             }
 
-            const qualifier = qualifiers[0];
-            const restQualifiers = qualifiers.slice(1);
+            const currentQualifier = qualifiers[0];
+            const remainingQualifiers = qualifiers.slice(1);
 
-            if (qualifier.includes('<-')) { // Generator case
-                const [pattern, list] = qualifier.split('<-').map(p => p.trim());
+            addTranslation(state, `\nProcessing Qualifier: "${currentQualifier}"`);
+            addTranslation(state, `Remaining Qualifiers: [${remainingQualifiers.join(', ')}]`);
 
-                translations.push(
-                    `"${input}" --> flatten/map translation with pattern "${pattern}" and list "${list}"`
+            if (currentQualifier.includes('<-')) {
+                // Generator case
+                const [pattern, list] = currentQualifier.split('<-').map(p => p.trim());
+                
+                addTranslation(state, `\nGenerator Translation:`);
+                addTranslation(state, `• Pattern: ${pattern}`);
+                addTranslation(state, `• Source List: ${list}`);
+
+                const remainingComprehension = remainingQualifiers.length > 0 
+                    ? `[${expression} | ${remainingQualifiers.join(', ')}]`
+                    : `[${expression}]`;
+
+                addTranslation(state, `\nRecursive Processing:`);
+                addTranslation(state, `• Inner Comprehension: ${remainingComprehension}`);
+                
+                // Show partial construction
+                const partialResult1 = `concat (map (\\${pattern} -> ???) ${list})`;
+                const partialResult2 = `flatten (maplist (\\${pattern} -> ???) ${list})`;
+                showIntermediateResult(state, 'Generator (Partial)', partialResult1, partialResult2);
+
+                // Recursive call with increased depth
+                state.depth++;
+                const { result1: innerResult1, result2: innerResult2 } = translateListComprehension(
+                    remainingComprehension, 
+                    state
                 );
+                state.depth--;
 
-                // Intermediate forms
-                const intermediateForm1 = `concat (map (\\${pattern} -> "[${expression} | ${restQualifiers.join(', ')}]") ${list})`;
-                const intermediateForm2 = `flatten (maplist (\\${pattern} -> "[${expression} | ${restQualifiers.join(', ')}]") ${list})`;
+                const finalResult1 = `concat (map (\\${pattern} -> ${innerResult1}) ${list})`;
+                const finalResult2 = `flatten (maplist (\\${pattern} -> ${innerResult2}) ${list})`;
+
+                showIntermediateResult(state, 'Generator (Complete)', finalResult1, finalResult2);
                 
-                translations.push(`--> ${intermediateForm1}`);
-                translations.push(`--> ${intermediateForm2}`);
+                return { result1: finalResult1, result2: finalResult2 };
+            } else {
+                // Guard case
+                addTranslation(state, `\nGuard Translation:`);
+                addTranslation(state, `• Condition: ${currentQualifier}`);
 
-                // Recursively process the rest of the list comprehension
-                const innerComp = `[${expression}${restQualifiers.length > 0 ? ' | ' + restQualifiers.join(', ') : ''}]`;
-                const { result1: innerResult1, result2: innerResult2 } = translateListComprehension(innerComp, depth + 1, translations);
+                const remainingComprehension = remainingQualifiers.length > 0
+                    ? `[${expression} | ${remainingQualifiers.join(', ')}]`
+                    : `[${expression}]`;
 
-                return { 
-                    result1: `concat (map (\\${pattern} -> ${innerResult1}) ${list})`,
-                    result2: `flatten (maplist (\\${pattern} -> ${innerResult2}) ${list})`,
-                    translations 
-                };
-                
-            } else { // Guard case
-                const predicate = qualifier;
+                // Show partial construction
+                const partialResult = `if ${currentQualifier} then ??? else []`;
+                showIntermediateResult(state, 'Guard (Partial)', partialResult, partialResult);
 
-                translations.push(`Processing guard "${predicate}"`);
+                addTranslation(state, `\nRecursive Processing:`);
+                addTranslation(state, `• Inner Comprehension: ${remainingComprehension}`);
 
-                const restComp = `[${expression}${restQualifiers.length > 0 ? ' | ' + restQualifiers.join(', ') : ''}]`;
-                
-                const { result1: restResult1, result2: restResult2 } = translateListComprehension(restComp, depth + 1, translations);
+                // Recursive call with increased depth
+                state.depth++;
+                const { result1: restResult1, result2: restResult2 } = translateListComprehension(
+                    remainingComprehension,
+                    state
+                );
+                state.depth--;
 
-                return { 
-                    result1: `if ${predicate} then ${restResult1} else []`,
-                    result2: `if ${predicate} then ${restResult2} else []`,
-                    translations 
-                };
+                const finalResult1 = `if ${currentQualifier} then ${restResult1} else []`;
+                const finalResult2 = `if ${currentQualifier} then ${restResult2} else []`;
+
+                showIntermediateResult(state, 'Guard (Complete)', finalResult1, finalResult2);
+
+                return { result1: finalResult1, result2: finalResult2 };
             }
         }
     </script>
