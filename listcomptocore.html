@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Haskell List Comprehension to Core Converter</title>
+    <style>
+        body {
+            font-family: system-ui, -apple-system, sans-serif;
+            max-width: 800px;
+            margin: 2rem auto;
+            padding: 0 1rem;
+            line-height: 1.6;
+        }
+        .container {
+            display: flex;
+            flex-direction: column;
+            gap: 1rem;
+        }
+        textarea {
+            width: 100%;
+            min-height: 120px;
+            padding: 0.5rem;
+            font-family: monospace;
+            font-size: 14px;
+        }
+        pre {
+            white-space: pre-wrap;
+            background: #f5f5f5;
+            padding: 1rem;
+            border-radius: 4px;
+        }
+        .error {
+            color: red;
+            display: none;
+            margin-top: 0.5rem;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Haskell List Comprehension to Core Converter</h1>
+        
+        <div>
+            <label for="input">Enter Haskell List Comprehension:</label>
+            <textarea id="input" placeholder="Example: [(a,b) | a <- as, b <- bs]"></textarea>
+        </div>
+        
+        <button onclick="convertToCore()">Convert</button>
+        
+        <div>
+            <label for="output1">Core Haskell (Version 1 - concat/map):</label>
+            <textarea id="output1" readonly></textarea>
+        </div>
+
+        <div>
+            <label for="output2">Core Haskell (Version 2 - flatten/maplist):</label>
+            <textarea id="output2" readonly></textarea>
+        </div>
+
+        <div>
+            <label for="steps">Translation Steps:</label>
+            <pre id="steps"></pre>
+        </div>
+
+        <div id="error" class="error"></div>
+    </div>
+
+    <script>
+        function convertToCore() {
+            const input = document.getElementById('input').value.trim();
+            const output1 = document.getElementById('output1');
+            const output2 = document.getElementById('output2');
+            const steps = document.getElementById('steps');
+            const error = document.getElementById('error');
+
+            try {
+                error.style.display = 'none';
+                const { result1, result2, translations } = translateListComprehension(input);
+                output1.value = result1; // Version using concat/map
+                output2.value = result2; // Version using flatten/maplist
+                steps.textContent = translations.join('\n');
+            } catch (e) {
+                error.textContent = `Error: ${e.message}`;
+                error.style.display = 'block';
+                output1.value = '';
+                output2.value = '';
+                steps.textContent = '';
+            }
+        }
+
+        function parseListComprehension(input) {
+            if (!input.startsWith('[') || !input.endsWith(']')) {
+                throw new Error('List comprehension must be enclosed in square brackets.');
+            }
+
+            input = input.slice(1, -1).trim(); // Remove square brackets
+
+            if (!input.includes('|')) {
+                return { expression: input, qualifiers: [] }; // No qualifiers
+            }
+
+            const [expr, quals] = input.split('|').map(part => part.trim());
+            
+            if (!expr || !quals) {
+                throw new Error('Invalid list comprehension syntax.');
+            }
+
+            const qualifiers = quals.split(',').map(q => q.trim());
+            
+            return { expression: expr, qualifiers };
+        }
+
+        function translateListComprehension(input, depth = 0, translations = []) {
+            const { expression, qualifiers } = parseListComprehension(input);
+
+            // Base case: no qualifiers
+            if (qualifiers.length === 0) {
+                translations.push(`"${input}" --> [${expression}]`);
+                return { 
+                    result1: `[${expression}]`,
+                    result2: `[${expression}]`,
+                    translations 
+                };
+            }
+
+            const qualifier = qualifiers[0];
+            const restQualifiers = qualifiers.slice(1);
+
+            if (qualifier.includes('<-')) { // Generator case
+                const [pattern, list] = qualifier.split('<-').map(p => p.trim());
+
+                translations.push(
+                    `"${input}" --> flatten/map translation with pattern "${pattern}" and list "${list}"`
+                );
+
+                // Intermediate forms
+                const intermediateForm1 = `concat (map (\\${pattern} -> "[${expression} | ${restQualifiers.join(', ')}]") ${list})`;
+                const intermediateForm2 = `flatten (maplist (\\${pattern} -> "[${expression} | ${restQualifiers.join(', ')}]") ${list})`;
+                
+                translations.push(`--> ${intermediateForm1}`);
+                translations.push(`--> ${intermediateForm2}`);
+
+                // Recursively process the rest of the list comprehension
+                const innerComp = `[${expression}${restQualifiers.length > 0 ? ' | ' + restQualifiers.join(', ') : ''}]`;
+                const { result1: innerResult1, result2: innerResult2 } = translateListComprehension(innerComp, depth + 1, translations);
+
+                return { 
+                    result1: `concat (map (\\${pattern} -> ${innerResult1}) ${list})`,
+                    result2: `flatten (maplist (\\${pattern} -> ${innerResult2}) ${list})`,
+                    translations 
+                };
+                
+            } else { // Guard case
+                const predicate = qualifier;
+
+                translations.push(`Processing guard "${predicate}"`);
+
+                const restComp = `[${expression}${restQualifiers.length > 0 ? ' | ' + restQualifiers.join(', ') : ''}]`;
+                
+                const { result1: restResult1, result2: restResult2 } = translateListComprehension(restComp, depth + 1, translations);
+
+                return { 
+                    result1: `if ${predicate} then ${restResult1} else []`,
+                    result2: `if ${predicate} then ${restResult2} else []`,
+                    translations 
+                };
+            }
+        }
+    </script>
+</body>
+</html>
